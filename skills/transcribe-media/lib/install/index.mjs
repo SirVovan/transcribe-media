@@ -153,7 +153,7 @@ async function packageEntries(root, relative = '') {
   }
   return entries;
 }
-// inPlace: скилл уже лежит там, где его ищет клиент (плагин Claude Code, npx skills add), — копирование пропускается.
+// inPlace: скилл уже лежит там, где его ищет клиент (плагин Claude Code, npx skills add, установщик Codex), — копирование пропускается.
 export async function installPackage({ agent, scope, projectRoot, inPlace = false, allowInstall = false, update = false, dryRun = false, tools, runProcess: run = runProcess, packageRoot = packageDirectory, home = os.homedir(), inspection, onProgress, ...options } = {}) {
   if (!inPlace) {
     if (!['codex','claude','both'].includes(agent)) throw fail('INSTALL_AGENT','agent: codex, claude или both.');
@@ -166,9 +166,12 @@ export async function installPackage({ agent, scope, projectRoot, inPlace = fals
     if (target === packageRoot || !path.relative(packageRoot,target).startsWith('..') && !path.isAbsolute(path.relative(packageRoot,target))) throw fail('INSTALL_RECURSION','Папка назначения не может находиться внутри исходного пакета.');
     await noLinks(target);
   }
-  // Скилл страницы настроек (/transcribe-settings) ставится рядом с основным, если он есть в пакете.
-  const companionRoot = path.join(path.dirname(packageRoot),'transcribe-settings');
-  const companions = await exists(path.join(companionRoot,'SKILL.md')) ? targets.map(target => path.join(path.dirname(target),'transcribe-settings')) : [];
+  // Скилл страницы настроек (/transcribe-settings) ставится рядом с основным: из пакета, а если основной скилл скачан один
+  // (установщик Codex берёт одну папку), — из копии companion/ внутри него; SKILL.template.md при копировании становится SKILL.md.
+  const sibling = path.join(path.dirname(packageRoot),'transcribe-settings'), bundled = path.join(packageRoot,'companion','transcribe-settings');
+  const companionRoot = await exists(path.join(sibling,'SKILL.md')) ? sibling : await exists(path.join(bundled,'SKILL.template.md')) ? bundled : null;
+  const companions = !companionRoot ? [] : inPlace ? (companionRoot === bundled ? [sibling] : []) : targets.map(target => path.join(path.dirname(target),'transcribe-settings'));
+  const placed = relative => relative === 'SKILL.template.md' ? 'SKILL.md' : relative;
   for (const target of companions) await noLinks(target);
   const dependencies = inspection || await inspectDependencies({tools,runProcess:run,...options,onProgress});
   const dependencyPlan = dependencies.ready ? null : await repairDependencies({tools,runProcess:run,home,...options,inspection:dependencies,dryRun:true,onProgress});
@@ -180,14 +183,14 @@ export async function installPackage({ agent, scope, projectRoot, inPlace = fals
   if (!inPlace && !entries.includes('SKILL.md')) throw fail('PACKAGE_INVALID','В пакете отсутствует SKILL.md.');
   const companionEntries = companions.length ? (await noLinks(companionRoot), await packageEntries(companionRoot)) : [];
   const copies = [...targets.map(target => [packageRoot,target,entries]),...companions.map(target => [companionRoot,target,companionEntries])];
-  for (const [,target,files] of copies) for (const relative of files) await noLinks(path.join(target,relative));
+  for (const [,target,files] of copies) for (const relative of files) await noLinks(path.join(target,placed(relative)));
   const repair = dependencies.ready ? null : await repairDependencies({tools,runProcess:run,home,...options,inspection:dependencies,allowInstall:true,onProgress});
   if (repair?.status === 'manual-required') return {status:'manual-required',targets,dependencies,tools:repair.tools,plan,warnings:repair.warnings};
   let done=0;const totalFiles=copies.reduce((sum,[,,files])=>sum+files.length,0);
   for (const [source,target,files] of copies) {
     await mkdir(target,{recursive:true});
     for (const relative of files) {
-      const destination = path.join(target,relative);
+      const destination = path.join(target,placed(relative));
       await mkdir(path.dirname(destination),{recursive:true});
       await noLinks(destination);
       await copyFile(path.join(source,relative),destination);

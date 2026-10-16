@@ -1,0 +1,6 @@
+interface:
+  display_name: "Настройки транскрибации"
+  short_description: "Открывает страницу настроек transcribe-media: ключи сервисов, язык, форматы"
+  default_prompt: "$transcribe-settings Открой страницу настроек транскрибации."
+policy:
+  allow_implicit_invocation: false

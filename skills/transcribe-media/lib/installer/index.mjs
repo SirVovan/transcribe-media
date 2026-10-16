@@ -19,7 +19,7 @@ function safe(value) {
   return value;
 }
 function pick(value,keys) { if(!value || typeof value!=='object' || Array.isArray(value))throw error('INVALID_INPUT','Ожидается объект параметров.');for(const k of Object.keys(value))if(!keys.includes(k))throw error('INVALID_INPUT','Неизвестный параметр.');return clone(value); }
-// inPlace: скилл уже поставлен из GitHub (/plugin install, npx skills add) — мастер ставит только программы и настройки.
+// inPlace: скилл уже поставлен из GitHub (/plugin install, npx skills add, установщик Codex) — мастер ставит только программы и настройки.
 function validateSelection(s) {if(s.inPlace!==undefined){if(s.inPlace!==true||Object.keys(s).length!==1)throw error('INVALID_SELECTION','Режим «скилл уже на месте» не сочетается с выбором клиента и области.');return;}if(!['codex','claude','both'].includes(s.agent)||!['user','project'].includes(s.scope))throw error('INVALID_SELECTION','Выберите клиент и область установки.');if(s.scope==='project' && (typeof s.projectRoot!=='string'||!path.isAbsolute(s.projectRoot)))throw error('INVALID_SELECTION','Укажите абсолютный путь проекта.');}
 function validateSettings(s) {
   if(typeof s.language!=='string'||!s.language.trim()||!Number.isFinite(s.interval)||s.interval<=0)throw error('INVALID_SETTINGS','Выберите язык и положительную длину субтитра.');
