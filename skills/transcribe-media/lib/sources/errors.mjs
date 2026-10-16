@@ -3,6 +3,7 @@ export function sourceError(code, message) { return Object.assign(new Error(mess
 // Inspect private diagnostics only for classification; never expose their contents.
 export function accessError(diagnostic = '', status) {
   if (status === 429 || /429|too many requests|rate.limit/i.test(diagnostic)) return sourceError('SOURCE_RATE_LIMIT', 'Источник ограничил частоту запросов. Повторите позже.');
+  if (/not a bot/i.test(diagnostic)) return sourceError('SOURCE_BOT_CHECK', 'Источник принял запрос за автоматический — обычно так бывает при подключении через прокси или VPN. Попробуйте прямое подключение: флаг --source-proxy direct.');
   if (status === 401 || /login|log.in|sign.in|cookies|authentication|private video/i.test(diagnostic)) return sourceError('SOURCE_LOGIN_REQUIRED', 'Источник требует входа. Cookies допускаются только с явным разрешением.');
   if (status === 403 || /forbidden|blocked|geo.restrict|not available in your country|captcha/i.test(diagnostic)) return sourceError('SOURCE_BLOCKED', 'Доступ к источнику ограничен.');
   if (status === 404 || status === 410 || /removed|deleted|unavailable|not found|does not exist/i.test(diagnostic)) return sourceError('SOURCE_UNAVAILABLE', 'Источник удалён или недоступен.');

@@ -42,7 +42,7 @@ export function defaultPaths({ home = os.homedir(), platform = process.platform,
   const data = platform === 'linux' ? path.join(env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'transcribe-media') : base;
   return { configPath: path.join(base, 'config.json'), credentialsFile: path.join(base, 'credentials.json'), outputRoot: path.join(home, 'Downloads'), workRoot: path.join(data, 'work') };
 }
-const defaults = () => ({ language: 'auto', interval: 30, formats: ['txt', 'srt', 'vtt'], provider: 'deepgram', diarize: false, speakerCount: 'auto', providers: { deepgram: { enabled: true }, assemblyai: { enabled: true } }, tools: { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', ytdlp: 'yt-dlp', node: 'node' }, ...defaultPaths() });
+const defaults = () => ({ language: 'auto', interval: 30, formats: ['txt', 'srt', 'vtt'], provider: 'deepgram', diarize: false, speakerCount: 'auto', sourceProxy: 'system', providers: { deepgram: { enabled: true }, assemblyai: { enabled: true } }, tools: { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', ytdlp: 'yt-dlp', node: 'node' }, ...defaultPaths() });
 export async function resolveConfig({ configPath, projectConfigPath, overrides = {}, cwd = process.cwd() } = {}) {
   cwd = path.resolve(cwd);
   const user = await json(path.resolve(cwd, configPath || defaultPaths().configPath));
@@ -55,6 +55,7 @@ export async function resolveConfig({ configPath, projectConfigPath, overrides =
   result.formats = [...new Set(result.formats)]; providerName(result.provider);
   if (typeof result.diarize !== 'boolean') throw configError('diarize должен быть boolean.');
   if (result.speakerCount !== 'auto' && (!Number.isInteger(result.speakerCount) || result.speakerCount < 1)) throw configError('speakerCount: auto или положительное целое.');
+  if (!['system', 'direct'].includes(result.sourceProxy)) throw configError('sourceProxy: system или direct.');
   for (const name of providers) if (typeof result.providers[name]?.enabled !== 'boolean') throw configError('providers.enabled должен быть boolean.');
   for (const key of ['outputRoot', 'workRoot', 'credentialsFile']) result[key] = path.resolve(cwd, result[key]);
   for (const [key, value] of Object.entries(result.tools)) if (typeof value !== 'string' || !value) throw configError('Некорректный путь инструмента.'); else if (/[\\/]/.test(value)) result.tools[key] = path.resolve(cwd, value);
