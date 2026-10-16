@@ -56,7 +56,7 @@ export async function runTerminal(engine,{input=process.stdin,output=process.std
     s=engine.snapshot();if(!['done','skipped'].includes(s.stages.provider))await connectProvider();
     if(engine.snapshot().stages.configure!=='done'){
       const language=await ask('Язык: auto — определять автоматически, или код, например ru, en:');
-      const interval=Number(await ask('Максимальная длина одной реплики субтитров, секунд (например 30; действует, когда сервис вернул тайминги слов):',v=>Number.isFinite(Number(v))&&Number(v)>0));
+      const interval=Number(await ask('Длина блока субтитров, секунд (например 30: блоки 0–30, 30–60 с и так далее):',v=>Number.isFinite(Number(v))&&Number(v)>0));
       const formats=await choice('Форматы: 1 TXT/SRT/VTT, 2 TXT, 3 SRT, 4 VTT',['все','txt','srt','vtt']);
       const diarize=await yes('Разделять участников?');
       const speakerCount=diarize?await ask('Количество участников: auto или положительное целое:',v=>v==='auto'||/^\d+$/.test(v)&&Number(v)>0):'auto';

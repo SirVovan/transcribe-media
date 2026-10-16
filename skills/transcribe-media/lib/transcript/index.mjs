@@ -52,15 +52,18 @@ export function normalizeTranscript(result, { source, language, detectedLanguage
   const detected = detectedLanguage ?? result.detectedLanguage;
   return { schemaVersion: 1, timeUnit: 'seconds', timingOrigin: 'original-media', source: source ?? result.source, language: language ?? result.language, ...(detected ? { detectedLanguage: detected } : {}), method, ...(provider ? { provider } : {}), ...(model ?? result.model ? { model: model ?? result.model } : {}), text, words, speakerTurns, captions, ...(Number.isFinite(duration) ? { durationSeconds: duration } : {}), timingPrecision: words.length ? 'word' : captions.length || speakerTurns.length ? 'phrase' : 'none', warnings: [...new Set(warnings)] };
 }
-export function buildCaptions(words, options = {}) {
+// Blocks on a fixed grid of `interval` seconds (0–30, 30–60, …), as konspekt's youtube_to_srt.py rebucket
+// (user decision 16.10): a word or a source phrase goes to the block where it starts; a speaker change splits a block.
+// Unlike konspekt, a block starts with its first word, not at the grid mark: subtitles do not appear before speech.
+export function buildCaptions(units, options = {}) {
   const interval = typeof options === 'number' ? options : options.interval ?? 30;
-  if (!Number.isFinite(interval) || interval <= 0) throw new Error('interval должен быть больше нуля.'); validateTimings(words);
-  const captions = []; let current;
-  for (const word of words) {
-    if (current && (word.end - current.start > interval || word.start - current.end > 0.5 || word.speaker !== current.speaker)) { captions.push(current); current = undefined; }
-    if (!current) current = { ...word };
-    else { current.text += ` ${word.text}`; current.end = Math.max(current.end, word.end); }
-    if (/[.!?…]$/.test(word.text) || word.end - word.start > interval) { captions.push(current); current = undefined; }
+  if (!Number.isFinite(interval) || interval <= 0) throw new Error('interval должен быть больше нуля.'); validateTimings(units);
+  const captions = []; let current, slot;
+  for (const unit of units) {
+    const unitSlot = Math.floor(unit.start / interval);
+    if (current && (unitSlot !== slot || unit.speaker !== current.speaker)) { captions.push(current); current = undefined; }
+    if (!current) { current = { ...unit }; slot = unitSlot; }
+    else { current.text += ` ${unit.text}`; current.end = Math.max(current.end, unit.end); }
   }
   if (current) captions.push(current);
   // Deepgram sometimes returns overlapping words: a caption ends no later than the next one starts.
@@ -101,15 +104,17 @@ export function formatTranscript(transcript, { interval, formats, diarize = fals
   if (!Number.isFinite(interval) || interval <= 0) throw new Error('Настройте interval больше нуля.');
   if (!Array.isArray(formats) || !formats.length || formats.some(format => !['txt', 'srt', 'vtt'].includes(format))) throw new Error('Выберите допустимые formats.');
   const normalized = normalizeTranscript(transcript, { source: transcript.source, language: transcript.language, method: transcript.method, provider: transcript.provider, model: transcript.model });
-  normalized.captions = normalized.words.length ? buildCaptions(normalized.words, { interval }) : normalized.captions;
+  // Source phrases stay in transcript.json, so reformat can regroup them with another interval.
+  const blocks = buildCaptions(normalized.words.length ? normalized.words : normalized.captions, { interval });
+  if (normalized.words.length) normalized.captions = blocks;
   const warnings = [...normalized.warnings];
-  if (normalized.timingPrecision === 'phrase') warnings.push('Субтитры содержат тайминги фраз; границы фраз сохранены.');
+  if (normalized.timingPrecision === 'phrase') warnings.push('Субтитры источника содержат тайминги фраз: блоки собраны из целых фраз, граница блока может сдвинуться на длину фразы.');
   if (diarize && ![...normalized.words, ...normalized.speakerTurns, ...normalized.captions].some(item => item.speaker)) warnings.push('Источник не содержит меток спикеров.');
   if (normalized.timingPrecision === 'none' && formats.some(format => format !== 'txt')) warnings.push('Тайминги отсутствуют; SRT/VTT не содержат временных реплик.');
   const files = {};
   if (formats.includes('txt')) files['transcript.txt'] = (diarize && normalized.speakerTurns.length ? normalized.speakerTurns.map(turn => captionText(turn, true)).join('\n\n') : normalized.words.length || normalized.captions.length ? paragraphs(normalized.words.length ? normalized.words : normalized.captions) : normalized.text) + '\n';
-  if (formats.includes('srt')) files['transcript.srt'] = buildSrt(normalized.captions, { diarize });
-  if (formats.includes('vtt')) files['transcript.vtt'] = buildVtt(normalized.captions, { diarize });
+  if (formats.includes('srt')) files['transcript.srt'] = buildSrt(blocks, { diarize });
+  if (formats.includes('vtt')) files['transcript.vtt'] = buildVtt(blocks, { diarize });
   normalized.warnings = [...new Set(warnings)]; return { files, transcript: normalized, warnings: normalized.warnings };
 }
 // Entity cleaning and nested voice parsing adapted from Audio-Transcribator

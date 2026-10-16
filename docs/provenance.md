@@ -7,7 +7,7 @@
 | `ИИ_монтаж` — `scripts/transcribe.mjs`, `lib/transcription/{config,deepgram,assemblyai,format}.mjs`, `.agents/skills/video-edit-pipeline/scripts/workspace.mjs` | Формы конфигурации, адаптеры Deepgram/AssemblyAI, форматирование, SHA-256 и состояние платного запроса | Личный путь FFmpeg и зависимости монтажа |
 | `Audio-Transcribator` — `apps/audio-transcriber-mvp/src/lib/subtitles/{srt,vtt,shared,decode}.ts`, `src/lib/jobs/{download,storage,processor,cleanup,active-job-lock}.ts` | Очистка текста субтитров, смежные повторы, безопасное имя файла, сохранённая задача и ограниченная уборка | Веб-стек и дополнительные провайдеры |
 | `tg-news-scout` — `tools/fetch_transcript.py`, `src/tg_news_scout/fetchers/yt_dlp_policy.py` | Классификация ошибок источника, выбор субтитров, внедрение исполняемого файла и пути вывода | Жёстко заданные cookie-профили и неявные cookies |
-| `konspekt-project` — `.claude/skills/konspekt/youtube_to_srt.py` | Приоритет ручных субтитров, `--ignore-config` и явный Node runtime для yt-dlp | Расширение исходных таймингов до 30-секундных блоков, proxy override и неявные cookies |
+| `konspekt-project` — `.claude/skills/konspekt/youtube_to_srt.py` | Приоритет ручных субтитров, `--ignore-config` и явный Node runtime для yt-dlp; сборка субтитров в блоки по сетке интервала (`rebucket`, с 16.10; начало блока — по первому слову) | Proxy override и неявные cookies |
 
 Провайдерские параметры и ссылки на официальную документацию собраны отдельно в [references/providers.md](../skills/transcribe-media/references/providers.md). Эта таблица описывает происхождение решений, но не является аудитом лицензий или прав на распространение.
 

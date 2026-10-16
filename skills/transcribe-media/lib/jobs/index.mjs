@@ -171,9 +171,14 @@ export async function createJob({ workRoot, outputRoot, title = 'transcript', so
   const runId = randomUUID(); const jobDir = path.join(path.resolve(workRoot), 'jobs', runId); const tempDir = path.join(jobDir, 'temp');
   let basename = String(title).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'transcript';
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(basename)) basename = `_${basename}`;
-  const outputDir = path.join(path.resolve(outputRoot), `${basename}-${runId}`);
-  await mkdir(tempDir, { recursive: true }); await mkdir(outputDir, { recursive: true });
-  const job = { schemaVersion: 1, runId, source, parameters, outputDir, jobDir, tempDir, createdFiles: [], status: 'created', warnings: [] };
+  // TRANSCRIPT_<title>, then "(2)", "(3)", … (user decision 16.10); mkdir without recursive claims a free name atomically.
+  await mkdir(tempDir, { recursive: true }); await mkdir(path.resolve(outputRoot), { recursive: true });
+  let outputDir;
+  for (let number = 1; !outputDir; number++) {
+    const candidate = path.join(path.resolve(outputRoot), `TRANSCRIPT_${basename}${number > 1 ? ` (${number})` : ''}`);
+    try { await mkdir(candidate); outputDir = candidate; } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  }
+  const job = { schemaVersion: 1, runId, source, parameters, outputDir, fileBase: basename, jobDir, tempDir, createdFiles: [], status: 'created', warnings: [] };
   await saveJob(job); return job;
 }
 export async function saveJob(job) {
@@ -215,6 +220,8 @@ export async function saveProviderResponse(job, raw) {
     }
   } finally { await unlinkReceipt(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
+// Text and subtitle files carry the title; folders made before 16.10 have no fileBase and keep transcript.*.
+export function resultFile(job, format) { return `${job.fileBase || 'transcript'}.${format}`; }
 export async function saveResult(job, { transcript, files, raw, source }) {
   jobPaths(job);
   if (Object.keys(files || {}).some(file => !['transcript.txt', 'transcript.srt', 'transcript.vtt'].includes(file))) throw new Error('Недопустимый файл результата.');
@@ -225,7 +232,7 @@ export async function saveResult(job, { transcript, files, raw, source }) {
   if (raw !== undefined) await atomic(path.join(job.outputDir, 'raw.json'), raw);
   await atomic(path.join(job.outputDir, 'transcript.json'), { ...transcript, source: publicDescription });
   await atomic(path.join(job.outputDir, 'source.json'), publicDescription);
-  for (const [file, text] of Object.entries(files || {})) await writeFile(path.join(job.outputDir, file), text, { encoding: 'utf8', mode: 0o600 });
+  for (const [file, text] of Object.entries(files || {})) await writeFile(path.join(job.outputDir, resultFile(job, path.extname(file).slice(1))), text, { encoding: 'utf8', mode: 0o600 });
   job.status = 'complete'; job.warnings = [...new Set([...(job.warnings || []), ...(transcript.warnings || [])])]; await saveJob(job);
   await atomic(path.join(job.outputDir, 'job.json'), { ...job, source: publicDescription, parameters: publicParameters(job.parameters) });
 }
@@ -234,7 +241,8 @@ export async function saveResult(job, { transcript, files, raw, source }) {
 // A completed payment record goes together with its expired cache: alone it would block the file.
 const DAY_MS = 86_400_000;
 const RUN_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const OUTPUT_DIR = /-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+// Result folders: TRANSCRIPT_<title> since 16.10, <title>-<runId> before.
+const OUTPUT_DIR = /^TRANSCRIPT_|-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SWEEP_LABELS = { temp: 'Временные файлы прошлых запусков', job: 'Служебные папки прошлых запусков', cache: 'Кэш старше 14 дней', request: 'Записи об оплаченных запросах без кэша', output: 'Пустые папки результатов' };
 async function entries(dir) { return readdir(dir, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; }); }
 async function sizeOf(target) {
@@ -308,8 +316,9 @@ export async function findResult({ outputRoot, cacheKey, interval, formats }) {
     if (!entry.isDirectory() || !OUTPUT_DIR.test(entry.name)) continue;
     const dir = path.join(root, entry.name); let job;
     try { job = await json(path.join(dir, 'job.json')); } catch { continue; }
-    if (job?.status !== 'complete' || job.cacheKey !== cacheKey || job.parameters?.interval !== interval || !Array.isArray(job.parameters?.formats) || [...job.parameters.formats].sort().join() !== wanted) continue;
-    const files = await Promise.all(['transcript.json', ...formats.map(format => `transcript.${format}`)].map(file => lstat(path.join(dir, file)).then(info => info.isFile(), () => false)));
+    // No fileBase: made before 16.10 with transcript.* names and the old caption cut — rebuild instead.
+    if (job?.status !== 'complete' || !job.fileBase || job.cacheKey !== cacheKey || job.parameters?.interval !== interval || !Array.isArray(job.parameters?.formats) || [...job.parameters.formats].sort().join() !== wanted) continue;
+    const files = await Promise.all(['transcript.json', ...formats.map(format => resultFile(job, format))].map(file => lstat(path.join(dir, file)).then(info => info.isFile(), () => false)));
     if (!files.every(Boolean)) continue;
     const time = (await stat(path.join(dir, 'job.json'))).mtimeMs;
     if (!best || time > best.time) best = { time, outputDir: dir, runId: job.runId };
