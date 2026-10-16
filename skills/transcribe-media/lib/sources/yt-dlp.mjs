@@ -8,6 +8,8 @@ export function ytdlpArgs(config = {}, cwd = process.cwd()) {
   const access = config.sourceAccess || {};
   if ((access.cookiesFile || access.cookiesBrowser) && access.allowCookies !== true) throw sourceError('COOKIES_NOT_ALLOWED', 'Для cookies требуется явное разрешение allowCookies.');
   const args = ['--ignore-config', '--no-playlist', '--no-progress', '--no-js-runtimes', '--js-runtimes', `node:${config.tools?.node || 'node'}`, '--retries', '2', '--fragment-retries', '2', '--extractor-retries', '2', '--socket-timeout', '30'];
+  // Without it yt-dlp on Windows prints paths and JSON in the console code page, and a Cyrillic path breaks on UTF-8 decoding.
+  args.push('--encoding', 'utf-8');
   // direct: bypass HTTP(S)_PROXY and the Windows system proxy; YouTube answers a datacenter proxy with a bot check.
   if (config.sourceProxy === 'direct') args.push('--proxy', '');
   if (access.allowCookies === true && access.cookiesFile) args.push('--cookies', path.resolve(cwd, access.cookiesFile));

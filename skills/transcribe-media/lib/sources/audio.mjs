@@ -70,7 +70,8 @@ async function downloadSource(source, options) {
     const result = await callYtdlp(['--no-cache-dir', '--no-write-info-json', '--no-write-thumbnail', '--no-continue', '--no-overwrites', '--paths', `home:${tempDir}`, '--paths', `temp:${tempDir}`, '-f', audioFormat(source), '-o', path.join(tempDir, 'source.%(ext)s'), '--print', 'after_move:filepath', '--', source.canonicalUrl || source.input], { ...options, timeoutMs });
     const file = String(result.stdout || '').trim().split(/\r?\n/).at(-1);
     if (!file) throw sourceError('SOURCE_DOWNLOAD', 'Инструмент не сообщил путь скачанного медиа.');
-    return await safeFile(tempDir, path.resolve(tempDir, file));
+    try { return await safeFile(tempDir, path.resolve(tempDir, file)); }
+    catch (error) { if (error.code === 'ENOENT') throw sourceError('SOURCE_DOWNLOAD', 'Медиа скачано, но файл не найден по пути, который сообщил yt-dlp. Временные файлы сохранены.'); throw error; }
   } finally { await trackFiles(tempDir, options.registerTemp); }
 }
 export async function prepareAudio(source, options = {}) {
