@@ -1,0 +1,12 @@
+{
+  "name": "transcribe-media",
+  "description": "Скилл transcribe-media для Claude Code",
+  "owner": { "name": "SirVovan" },
+  "plugins": [
+    {
+      "name": "transcribe-media",
+      "source": "./",
+      "description": "Расшифровка аудио и видео: текст и субтитры TXT, SRT, VTT"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Настройки transcribe-media</title><link rel="stylesheet" href="/setup.css"><script type="module" src="/setup.js"></script></head>
+<body><main>
+<header><span class="eyebrow">TRANSCRIBE MEDIA · НАСТРОЙКИ</span><h1>Сервисы распознавания и настройки</h1><p id="connection" role="status">Загружаем настройки…</p></header>
+<section id="overall" class="overall"><span id="overall-badge" class="badge"></span><div><h2 id="overall-title"></h2><p id="overall-note"></p></div></section>
+<div id="providers"></div>
+<section id="settings-section"><h2>Настройки расшифровки</h2>
+<form id="settings-form" novalidate>
+<label>Язык <select id="language" name="language"></select></label>
+<label>Длина субтитра, секунды <input id="interval" name="interval" type="number" min="0.5" step="0.5" required><small>Наибольшая длина одной строки субтитров SRT и VTT.</small></label>
+<fieldset><legend>Форматы</legend><label class="inline"><input type="checkbox" name="formats" value="txt"> TXT</label><label class="inline"><input type="checkbox" name="formats" value="srt"> SRT</label><label class="inline"><input type="checkbox" name="formats" value="vtt"> VTT</label></fieldset>
+<label class="inline"><input id="diarize" type="checkbox"> Разделять участников</label>
+<p id="diarize-note" class="note"></p>
+<label id="speakers-field">Число участников (AssemblyAI) <select id="speakers"><option value="auto">Определять автоматически</option></select></label>
+<label>Папка результата <input id="output" name="output" type="text" required spellcheck="false"><small>Абсолютный путь.</small></label>
+<button type="submit" id="save-settings">Сохранить</button><p id="settings-message" role="status"></p>
+</form></section>
+<footer>Страница работает на этом компьютере. Сервер настроек выключится сам через 30 минут без действий.</footer>
+</main></body></html>
