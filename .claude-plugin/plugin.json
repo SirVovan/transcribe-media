@@ -1,7 +1,7 @@
 {
   "name": "transcribe-media",
   "displayName": "Транскрибация медиа",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Расшифровка локальных аудио и видео, YouTube, TikTok и Instagram Reels через субтитры, кэш, Deepgram или AssemblyAI",
   "author": {
     "name": "SirVovan"
