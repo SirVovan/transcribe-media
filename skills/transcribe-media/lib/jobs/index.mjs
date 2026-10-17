@@ -169,7 +169,9 @@ function publicParameters(value) {
 }
 export async function createJob({ workRoot, outputRoot, title = 'transcript', source, parameters = {} }) {
   const runId = randomUUID(); const jobDir = path.join(path.resolve(workRoot), 'jobs', runId); const tempDir = path.join(jobDir, 'temp');
-  let basename = String(title).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[. ]+|[. ]+$/g, '').slice(0, 80) || 'transcript';
+  // NFC: macOS keeps «й» and «ё» decomposed. The cut counts code points, so an emoji is never split into a lone
+  // surrogate (the folder on disk would not match the path the assistant gets); dots and spaces go after the cut.
+  let basename = Array.from(String(title).toWellFormed().normalize('NFC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')).slice(0, 80).join('').replace(/^[. ]+|[. ]+$/g, '') || 'transcript';
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(basename)) basename = `_${basename}`;
   // TRANSCRIPT_<title>, then "(2)", "(3)", … (user decision 16.10); mkdir without recursive claims a free name atomically.
   await mkdir(tempDir, { recursive: true }); await mkdir(path.resolve(outputRoot), { recursive: true });

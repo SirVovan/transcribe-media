@@ -25,9 +25,19 @@ function merge(base, patch) {
   for (const [key, value] of Object.entries(patch)) result[key] = plain(value) ? merge(plain(base[key]) ? base[key] : {}, value) : value;
   return result;
 }
+// A hand-edited file: PowerShell 5.1 writes UTF-8 with BOM (-Encoding utf8), UTF-16 (Out-File, >) or the ANSI code page
+// (Set-Content). The first two are read as is; ANSI would silently turn Cyrillic paths into «�», so it is refused.
+export function settingsText(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch { throw configError('Файл настроек сохранён не в кодировке UTF-8, и русские буквы в нём прочитались бы неверно. Пересохраните его в UTF-8 (в Блокноте: «Сохранить как» → кодировка UTF-8).', 'CONFIG_ENCODING'); }
+}
 async function json(file) {
-  try { const data = JSON.parse(await readFile(file, 'utf8')); if (!plain(data)) throw new Error(); return data; }
-  catch (error) { if (error.code === 'ENOENT') return {}; throw configError('Не удалось прочитать JSON настроек.'); }
+  let text;
+  try { text = settingsText(await readFile(file)); }
+  catch (error) { if (error.code === 'ENOENT') return {}; if (error.code === 'CONFIG_ENCODING') throw error; throw configError('Не удалось прочитать JSON настроек.'); }
+  try { const data = JSON.parse(text); if (!plain(data)) throw new Error(); return data; }
+  catch { throw configError('Не удалось прочитать JSON настроек.'); }
 }
 async function atomic(file, value) {
   await mkdir(path.dirname(file), { recursive: true });

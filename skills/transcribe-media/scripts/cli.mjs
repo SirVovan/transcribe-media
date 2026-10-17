@@ -2,6 +2,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, stat, rmdir } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import * as configuration from '../lib/config/index.mjs';
 import * as jobs from '../lib/jobs/index.mjs';
 import * as transcript from '../lib/transcript/index.mjs';
@@ -99,7 +100,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
     const readSettings = async () => {
       const result = { ...d.defaultPaths(), tools: {} };
       for (const file of [configPath, projectConfigPath].filter(Boolean)) {
-        let saved; try { saved = JSON.parse(await readFile(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') continue; throw fail('CONFIG_READ', 'Не удалось прочитать JSON настроек.'); }
+        let saved; try { saved = JSON.parse(d.settingsText(await readFile(file))); } catch (error) { if (error.code === 'ENOENT') continue; if (error.code === 'CONFIG_ENCODING') throw error; throw fail('CONFIG_READ', 'Не удалось прочитать JSON настроек.'); }
         for (const name of ['credentialsFile', 'workRoot', 'outputRoot', 'language', 'interval']) if (saved[name] !== undefined) result[name] = saved[name];
         result.tools = { ...result.tools, ...(saved.tools || {}) };
       }
@@ -333,4 +334,6 @@ export async function main(args = process.argv.slice(2), options = {}) {
     errorOutput(result); return result;
   }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = (await main()).exitCode;
+// Through a symlink or junction (npx skills add) argv[1] keeps the link while import.meta.url is the real path.
+function invokedDirectly() { try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } }
+if (invokedDirectly()) process.exitCode = (await main()).exitCode;

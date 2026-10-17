@@ -7,7 +7,9 @@ function errorLines(diagnostic) { return String(diagnostic).split(/\r?\n/).filte
 export function toolReason(line) {
   const text = String(line).trim().replace(/^ERROR:?\s*/, '')
     .replace(/;?\s*please report this issue on.*$/i, '').replace(/\s*Confirm you are on the latest version.*$/i, '')
-    .replace(/\b[a-z][\w+.-]*:\/\/\S+/gi, '<адрес>').replace(/\b[A-Za-z]:\\[^\s'"]*/g, '<путь>').replace(/\\\\[^\s'"]+/g, '<путь>').replace(/(?<![\w.<])\/(?:[\w.-]+\/)+[\w.-]*/g, '<путь>')
+    // Paths may hold Cyrillic and spaces: a quoted path goes whole; an unquoted one up to its last separator and file name.
+    .replace(/\b[a-z][\w+.-]*:\/\/\S+/gi, '<адрес>').replace(/(['"])(?:[A-Za-z]:\\|\\\\|\/)[^'"\r\n]*\1/g, '$1<путь>$1')
+    .replace(/\b[A-Za-z]:\\(?:[^\\\r\n'"]*\\)*[^\s'"\\]*/g, '<путь>').replace(/\\\\[^\s'"]+/g, '<путь>').replace(/(?<![\p{L}\p{N}_.<])\/(?:[^\/\s'"][^\/\r\n'"]*\/)+[^\s'"\/]*/gu, '<путь>')
     .replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
   return text.length > 300 ? text.slice(0, 299) + '…' : text;
 }

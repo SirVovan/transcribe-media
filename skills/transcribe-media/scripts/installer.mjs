@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { mkdir,open,readFile,writeFile,unlink,lstat,readdir,rm,stat } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { createInstaller } from '../lib/installer/index.mjs';
 import { defaultPaths } from '../lib/config/index.mjs';
 import { startServer } from '../lib/installer/server.mjs';
@@ -145,7 +146,9 @@ export async function main(args=process.argv.slice(2),options={}){
   const run=deps.runTerminal||(await import('../lib/installer/terminal.mjs')).runTerminal;try{return await run(engine,{input:options.input||process.stdin,output,url:server.url,openBrowser:env.TRANSCRIBE_BOOTSTRAP_HANDOFF?undefined:options.openBrowser,connect:command==='connect'});}finally{await close();}
  }catch(e){await close();throw e;}
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+// Через символическую ссылку или junction (npx skills add) argv[1] остаётся путём ссылки, а import.meta.url — настоящим путём.
+const invokedDirectly=()=>{try{return !!process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url));}catch{return false;}};
+if(invokedDirectly()){
  const logFile=process.env[serveLogVariable];
  if(logFile){const {appendFileSync}=await import('node:fs');for(const stream of [process.stdout,process.stderr])stream.write=(chunk,...rest)=>{try{appendFileSync(logFile,chunk);}catch{/* журнал недоступен */}rest.find(item=>typeof item==='function')?.();return true;};}
  try{const runtime=await main(process.argv.slice(2),{openBrowser:openUrl,cleanupTemp:true});if(runtime?.close)await new Promise(resolve=>{let stopping=false;const cleanup=()=>{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);resolve();};const stop=async()=>{if(stopping)return;stopping=true;try{await runtime.close();}catch{process.exitCode=1;}finally{cleanup();}};process.on('SIGINT',stop);process.on('SIGTERM',stop);runtime.closed.then(cleanup);});}
