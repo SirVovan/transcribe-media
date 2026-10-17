@@ -4,7 +4,7 @@ import { toolTitles } from '../install/index.mjs';
 const extraTitles = { youtube: 'YouTube / EJS', package: 'Скилл' };
 export const titleOf = tool => toolTitles[tool] || extraTitles[tool] || tool;
 const checkText = { available: 'найден', missing: 'не найден', unusable: 'не запускается', outdated: 'нужна версия новее', unavailable: 'недоступен' };
-const operationText = { winget: 'установка через winget', brew: 'установка через Homebrew', pip: 'обновление через pip', verify: 'проверка контрольной суммы', extract: 'распаковка' };
+const operationText = { winget: 'установка через winget', 'winget-upgrade': 'обновление через winget', 'self-update': 'самообновление', brew: 'установка через Homebrew', pip: 'обновление через pip', verify: 'проверка контрольной суммы', extract: 'распаковка' };
 const megabytes = bytes => (bytes / 1048576).toLocaleString('ru-RU', { maximumFractionDigits: bytes < 10485760 ? 1 : 0 });
 const files = n => { const a = n % 100, b = n % 10; return a > 10 && a < 20 ? 'файлов' : b === 1 ? 'файла' : 'файлов'; };
 

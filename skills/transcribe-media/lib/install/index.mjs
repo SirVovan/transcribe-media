@@ -73,7 +73,9 @@ async function checkTool(name, command, run) {
   try {
     const result = await run(command, [name === 'ffmpeg' || name === 'ffprobe' ? '-version' : '--version'], processOptions);
     const version = String(result.stdout).match(name === 'ytdlp' ? /\d{4}\.\d{2}\.\d{2}/ : /\d+(?:\.\d+){1,2}/)?.[0];
-    return { path: command, version: version || null, status: result.code !== 0 || !version ? 'unusable' : name === 'node' && Number(version.split('.')[0]) < 22 ? 'outdated' : 'available' };
+    // Номер выпуска FFmpeg есть только у релизных сборок («ffmpeg version 8.1.1-…»); у ночных сборок версию сравнить не с чем.
+    const release = name === 'ffmpeg' ? String(result.stdout).match(/^ffmpeg version n?(\d+(?:\.\d+){1,2})/m)?.[1] : undefined;
+    return { path: command, version: version || null, ...(release ? { release } : {}), status: result.code !== 0 || !version ? 'unusable' : name === 'node' && Number(version.split('.')[0]) < 22 ? 'outdated' : 'available' };
   } catch { return { path: command, version: null, status: 'missing' }; }
 }
 export async function locateTool(name, command, { runProcess: run = runProcess, platform = process.platform, env = process.env } = {}) {
@@ -86,7 +88,47 @@ export async function locateTool(name, command, { runProcess: run = runProcess, 
   }
   return first;
 }
-export async function inspectDependencies({ tools = {}, runProcess: run = runProcess, platform = process.platform, arch = process.arch, env = process.env, onProgress } = {}) {
+// Последние версии берутся из списков выпусков самих разработчиков. Читаются только при checkUpdates (установка, обновление, doctor).
+const latestSources = {
+  ytdlp: { url: 'https://pypi.org/pypi/yt-dlp/json', read: data => data?.info?.version },
+  node: { url: 'https://nodejs.org/dist/index.json', read: data => Array.isArray(data) ? data.find(item => item?.lts)?.version : null },
+  ffmpeg: { url: 'https://www.gyan.dev/ffmpeg/builds/release-version', text: true, read: text => text }
+};
+const brewSource = formula => ({ url: `https://formulae.brew.sh/api/formula/${formula}.json`, read: data => data?.versions?.stable });
+const versionParts = value => String(value || '').replace(/^v/i, '').split('.').map(part => Number.parseInt(part, 10) || 0);
+export function isNewer(latest, current) {
+  const a = versionParts(latest), b = versionParts(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  return false;
+}
+async function latestVersion(source, fetchImpl) {
+  try {
+    const response = await fetchImpl(source.url, { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) return null;
+    const value = String(source.read(source.text ? await response.text() : await response.json()) || '').trim().replace(/^v/i, '');
+    return /^\d+(?:\.\d+)+$/.test(value) ? value : null;
+  } catch { return null; }
+}
+// Устаревшие программы: yt-dlp ломается при изменениях сайтов, поэтому сверяется и он, и Node.js с FFmpeg (решение пользователя 17.10).
+async function checkLatest(found, { platform, fetchImpl }) {
+  const updates = [];
+  for (const name of ['ytdlp', 'node', 'ffmpeg']) {
+    const tool = found[name], current = name === 'ffmpeg' ? tool.release : tool.version;
+    // Linux пока ставит программы в личную папку и сверяет только yt-dlp.
+    if (tool.status !== 'available' || !current || platform === 'linux' && name !== 'ytdlp') continue;
+    // Пакет winget вида OpenJS.NodeJS.22 держит одну линию Node.js: сверяем с последней версией этой линии.
+    const line = name === 'node' && tool.wingetId?.match(/^OpenJS\.NodeJS\.(\d+)$/)?.[1];
+    const source = line ? { url: latestSources.node.url, read: data => Array.isArray(data) ? data.find(item => String(item?.version).startsWith(`v${line}.`))?.version : null } : platform === 'darwin' && (name === 'ffmpeg' || brewOwned(tool.location)) ? brewSource(brewFormulas[name]) : latestSources[name];
+    const latest = await latestVersion(source, fetchImpl);
+    if (!latest) continue;
+    tool.latest = latest;
+    if (line) { const lts = await latestVersion(latestSources.node, fetchImpl); if (lts && isNewer(lts, latest)) tool.newerLts = lts; }
+    if (isNewer(latest, current)) updates.push({ tool: name, current, latest });
+  }
+  return updates;
+}
+export const impersonateWarning = 'Часть сайтов (например, TikTok) может не открываться: у yt-dlp нет модуля curl_cffi, который выдаёт запросы за браузер.';
+export async function inspectDependencies({ tools = {}, runProcess: run = runProcess, platform = process.platform, arch = process.arch, env = process.env, onProgress, checkUpdates = false, fetchImpl = fetch } = {}) {
   const paths = toolPaths(tools), found = {};
   for (const [name, command] of Object.entries(paths)) {
     await progress(onProgress,{stage:'inspect',tool:name,operation:'check',status:'running'});
@@ -103,13 +145,26 @@ export async function inspectDependencies({ tools = {}, runProcess: run = runPro
       // Способ установки yt-dlp (pip, win_exe…) определяет рекомендованный путь обновления.
       found.ytdlp.variant = output.match(/yt-dlp version \S+ from \S+ \[\w+\] \(([\w-]+)\)/)?.[1] || null;
     } catch { ejs = 'unknown'; }
+    // curl_cffi: без него TikTok отвечает «Unexpected response» (17.10). Список целей печатается без обращения к сети.
+    try {
+      const result = await run(found.ytdlp.path, ['--ignore-config', '--no-plugin-dirs', '--list-impersonate-targets'], processOptions);
+      const lines = String(result.stdout + result.stderr).split(/\r?\n/);
+      found.ytdlp.impersonate = !lines.some(line => /impersonate targets/i.test(line)) ? 'unknown' : lines.some(line => /curl_cffi/i.test(line) && !/unavailable/i.test(line)) ? 'available' : 'missing';
+    } catch { found.ytdlp.impersonate = 'unknown'; }
   }
   let winget = null;
   if (platform === 'win32') {
+    // Где лежит программа, найденная по имени: по папке пакета winget выбирается, какой пакет обновлять.
+    for (const name of ['ytdlp', 'ffmpeg']) if (found[name].status === 'available' && !path.isAbsolute(found[name].path)) found[name].location = await onPath(found[name].path, env);
     winget = { status: 'missing', path: null };
     for (const command of ['winget', ...(env.LOCALAPPDATA ? [path.join(env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'winget.exe')] : [])]) {
       const result = await run(command, ['--version'], processOptions).catch(() => null);
       if (result?.code === 0) { winget = { status: 'available', path: command, version: String(result.stdout).trim() || null }; break; }
+    }
+    // Под каким пакетом winget стоит Node.js (OpenJS.NodeJS.LTS, линия OpenJS.NodeJS.22…): обновлять можно только его (17.10).
+    if (checkUpdates && winget.status === 'available' && found.node.status === 'available') {
+      const list = await run(winget.path, ['list', '--id', 'OpenJS.NodeJS', '--accept-source-agreements', '--disable-interactivity'], processOptions).catch(() => null);
+      found.node.wingetId = String(list?.stdout || '').match(/OpenJS\.NodeJS(?:\.\w+)?/)?.[0] || null;
     }
   }
   let brew = null;
@@ -119,20 +174,32 @@ export async function inspectDependencies({ tools = {}, runProcess: run = runPro
       const result = await run(command, ['--version'], processOptions).catch(() => null);
       if (result?.code === 0) { brew = { status: 'available', path: command, version: String(result.stdout).match(/\d+\.\d+\.\d+/)?.[0] || null }; break; }
     }
-    // Где лежит найденный yt-dlp: от этого зависит способ обновления (Homebrew, pip или отдельный файл).
-    if (found.ytdlp.status === 'available') {
-      const where = path.isAbsolute(found.ytdlp.path) ? found.ytdlp.path : String((await run('which', [found.ytdlp.path], processOptions).catch(() => null))?.stdout || '').trim().split(/\r?\n/)[0] || null;
-      found.ytdlp.location = where;
+    // Где лежат найденные программы: от этого зависит способ обновления (Homebrew, pip или отдельный файл).
+    for (const name of ['ytdlp', 'node', 'ffmpeg']) if (found[name].status === 'available') {
+      const where = path.isAbsolute(found[name].path) ? found[name].path : String((await run('which', [found[name].path], processOptions).catch(() => null))?.stdout || '').trim().split(/\r?\n/)[0] || null;
+      found[name].location = where;
     }
   }
   const nodeRuntime = found.node.status === 'available' ? 'available' : 'unavailable';
   const youtube = { nodeRuntime, ejs, status: nodeRuntime === 'available' && ejs === 'available' ? 'available' : 'unavailable', args: ['--js-runtimes', `node:${found.node.path}`] };
   await progress(onProgress,{stage:'inspect',tool:'youtube',operation:'check',status:youtube.status});
-  return { platform, arch, tools: found, youtube, ...(winget ? { winget } : {}), ...(brew ? { brew } : {}), ready: Object.values(found).every(item => item.status === 'available') && youtube.status === 'available', warnings: found.ytdlp.status === 'available' && ejs !== 'available' ? [ejsWarning] : [] };
+  const updates = checkUpdates ? await checkLatest(found, { platform, fetchImpl }) : [];
+  // refresh — что стоит обновить, хотя программы работают: устаревшие версии и yt-dlp без curl_cffi.
+  const refresh = [...new Set([...updates.map(item => item.tool), ...(found.ytdlp.impersonate === 'missing' ? ['ytdlp'] : [])])];
+  const warnings = [...(found.ytdlp.status === 'available' && ejs !== 'available' ? [ejsWarning] : []), ...(found.ytdlp.impersonate === 'missing' ? [impersonateWarning] : []),
+    ...(found.node.newerLts ? [`Вышла новая линия Node.js ${found.node.newerLts} (LTS). Скилл работает и на нынешней; перейти на новую можно вручную с https://nodejs.org.`] : [])];
+  return { platform, arch, tools: found, youtube, ...(winget ? { winget } : {}), ...(brew ? { brew } : {}), ready: Object.values(found).every(item => item.status === 'available') && youtube.status === 'available', updates, refresh, warnings };
 }
 const toolsFrom = inspection => Object.fromEntries(Object.entries(inspection.tools).map(([name, item]) => [name, item.path]));
 const preserved = (name,relative) => /^(?:\.env(?:\..*)?|\.git|config\.json|settings\.json|credentials(?:\.json)?|secrets?|keys?|cookies(?:\..*)?)$/i.test(name) || /\.(?:pem|key|p12|pfx)$/i.test(name) || !relative && /^(?:config|settings|work|output|outputs|results|cache)$/i.test(name);
 async function exists(file) { try { return await lstat(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } }
+// Windows: where.exe печатает пути в кодировке консоли, и кириллица в имени профиля пользователя теряется — ищем по PATH сами.
+async function onPath(command, env) {
+  const value = name => env[Object.keys(env).find(key => key.toUpperCase() === name)];
+  const names = path.extname(command) ? [command] : String(value('PATHEXT') || '.EXE;.CMD;.BAT').split(';').filter(Boolean).map(ext => command + ext.toLowerCase());
+  for (const dir of String(value('PATH') || '').split(';').filter(Boolean)) for (const name of names) { const file = path.join(dir, name); if (await exists(file).catch(() => null)) return file; }
+  return null;
+}
 async function noLinks(file) {
   const absolute = path.resolve(file); let current = path.parse(absolute).root;
   for (const part of absolute.slice(current.length).split(path.sep).filter(Boolean)) {
@@ -174,7 +241,8 @@ export async function installPackage({ agent, scope, projectRoot, inPlace = fals
   const placed = relative => relative === 'SKILL.template.md' ? 'SKILL.md' : relative;
   for (const target of companions) await noLinks(target);
   const dependencies = inspection || await inspectDependencies({tools,runProcess:run,...options,onProgress});
-  const dependencyPlan = dependencies.ready ? null : await repairDependencies({tools,runProcess:run,home,...options,inspection:dependencies,dryRun:true,onProgress});
+  const settled = dependencies.ready && !dependencies.refresh?.length;
+  const dependencyPlan = settled ? null : await repairDependencies({tools,runProcess:run,home,...options,inspection:dependencies,dryRun:true,onProgress});
   const plan = [...targets.map(target => ({action:update?'merge-package':'copy-package',source:packageRoot,target,preserve:['config','credentials','work','output','results','cookies']})),...companions.map(target => ({action:update?'merge-package':'copy-package',source:companionRoot,target,preserve:[]})),...(dependencyPlan?.plan || [])];
   const warnings = dependencyPlan?.warnings || dependencies.warnings || [];
   if (!allowInstall || dryRun) return {status:'planned',targets,dependencies,plan,warnings};
@@ -184,7 +252,7 @@ export async function installPackage({ agent, scope, projectRoot, inPlace = fals
   const companionEntries = companions.length ? (await noLinks(companionRoot), await packageEntries(companionRoot)) : [];
   const copies = [...targets.map(target => [packageRoot,target,entries]),...companions.map(target => [companionRoot,target,companionEntries])];
   for (const [,target,files] of copies) for (const relative of files) await noLinks(path.join(target,placed(relative)));
-  const repair = dependencies.ready ? null : await repairDependencies({tools,runProcess:run,home,...options,inspection:dependencies,allowInstall:true,onProgress});
+  const repair = settled ? null : await repairDependencies({tools,runProcess:run,home,...options,inspection:dependencies,allowInstall:true,onProgress});
   if (repair?.status === 'manual-required') return {status:'manual-required',targets,dependencies,tools:repair.tools,plan,warnings:repair.warnings};
   let done=0;const totalFiles=copies.reduce((sum,[,,files])=>sum+files.length,0);
   for (const [source,target,files] of copies) {
@@ -199,7 +267,9 @@ export async function installPackage({ agent, scope, projectRoot, inPlace = fals
   }
   return {status:update?'updated':'installed',targets,dependencies:repair?.inspection || dependencies,tools:repair?.tools || toolsFrom(dependencies),plan,warnings:repair?.warnings || warnings};
 }
-const pipCommand = ['-m','pip','install','-U','yt-dlp[default]'];
+// default — компонент EJS для YouTube, curl-cffi — запросы под видом браузера (TikTok и другие сайты с защитой).
+const pipCommand = ['-m','pip','install','-U','yt-dlp[default,curl-cffi]'];
+const fromTo = step => step.from && step.to ? ` с ${step.from} до ${step.to}` : '';
 const appInstallerUrl = 'https://apps.microsoft.com/detail/9NBLGGH4NNS1';
 // Человекочитаемый план для панели, терминала и чата; сам план остаётся машинным.
 export function describePlan(plan = []) {
@@ -208,9 +278,11 @@ export function describePlan(plan = []) {
     if (step.action === 'merge-package') return `Обновить скилл в ${step.target}; настройки и результаты сохраняются`;
     const title = toolTitles[step.tool] || step.tool;
     if (step.kind === 'download') return `Скачать ${title} с ${hostOf(step.url)}, сверить контрольную сумму SHA-256 и положить в личную папку программ${step.optional ? ' (нужно только для YouTube)' : ''}`;
+    if (step.kind === 'winget' && step.verb === 'upgrade') return `Обновить ${title}${fromTo(step)} через winget (пакет ${step.id})${step.tool === 'node' ? '; Windows попросит разрешение на изменения — нажмите «Да». Работающие программы не закрываются; если Node.js занят, новая версия заработает после перезагрузки' : ''}`;
+    if (step.kind === 'self-update') return `Обновить yt-dlp${fromTo(step)} его встроенной командой yt-dlp -U`;
     if (step.kind === 'winget') return `Установить ${title} через winget (пакет ${step.id})${step.tool === 'node' ? '; Windows попросит разрешение на изменения — нажмите «Да»' : ''}${step.tool === 'ytdlp' ? '; вместе с ним winget поставит Deno и FFmpeg, которые рекомендует yt-dlp' : ''}${step.tool === 'ffmpeg' ? '; шаг пропускается, если FFmpeg уже появится вместе с yt-dlp' : ''}${step.optional ? ' (нужно только для YouTube)' : ''}`;
-    if (step.kind === 'brew') return `${step.args[0] === 'upgrade' ? 'Обновить' : 'Установить'} ${title} через Homebrew (brew ${step.args.join(' ')})${step.tool === 'ytdlp' ? '; Homebrew поставит его вместе с компонентом EJS и Deno' : ''}${step.optional ? ' (нужно только для YouTube)' : ''}`;
-    if (step.kind === 'pip') return `Обновить yt-dlp так, как рекомендуют его разработчики для установки через pip: python ${pipCommand.join(' ')} — так появится компонент EJS (нужно только для YouTube)`;
+    if (step.kind === 'brew') return `${step.args[0] === 'upgrade' ? 'Обновить' : 'Установить'} ${title}${fromTo(step)} через Homebrew (brew ${step.args.join(' ')})${step.tool === 'ytdlp' ? '; Homebrew поставит его вместе с компонентом EJS и Deno' : ''}${step.optional ? ' (нужно только для YouTube)' : ''}`;
+    if (step.kind === 'pip') return `Обновить yt-dlp${fromTo(step)} так, как рекомендуют его разработчики для установки через pip: python ${pipCommand.join(' ')} — вместе с компонентом EJS (для YouTube) и модулем curl_cffi (для TikTok и других сайтов с защитой)`;
     if (step.kind === 'manual' && !step.tool && !step.command) return String(step.message || '');
     if (step.kind === 'manual') return `${title ? title + ': ' : ''}установите вручную${step.command ? ` (${[step.command,...(step.args||[])].join(' ')})` : ''}. ${step.message || ''}`.trim();
     return String(step.message || step.action || step.kind);
@@ -221,15 +293,29 @@ function userToolRoot({home = os.homedir(),platform = process.platform,env = pro
 }
 // Windows: программы ставятся способом, который указывают их разработчики, — через winget (официальный MSI Node.js,
 // официальный yt-dlp.exe, сборка FFmpeg от gyan.dev), а yt-dlp из pip обновляется через pip. В личную папку ничего не скачивается.
+const outdatedTool = (inspection,name) => (inspection.updates || []).find(item => item.tool === name);
+const versionStep = update => update ? {from:update.current,to:update.latest} : {};
+// yt-dlp обновляется, если нет EJS или curl_cffi или вышла новая версия; сбой обновления не останавливает установку.
+const ytdlpStale = inspection => inspection.youtube.ejs !== 'available' || inspection.tools.ytdlp.impersonate === 'missing' || !!outdatedTool(inspection,'ytdlp');
 function windowsPlan(inspection) {
   const {tools,youtube,winget} = inspection, absent = name => tools[name].status !== 'available';
   const wanted = [...(absent('node')?['node']:[]),...(absent('ytdlp')?['ytdlp']:[]),...(absent('ffmpeg')||absent('ffprobe')?['ffmpeg']:[])];
-  const ejsOnly = !absent('ytdlp') && youtube.ejs !== 'available';
   const hasWinget = winget?.status === 'available', plan = [];
   if (wanted.length && !hasWinget) return [{kind:'manual',automatic:false,url:appInstallerUrl,message:`Не хватает: ${wanted.map(name=>toolTitles[name]).join(', ')}. На компьютере нет winget — установите «Установщик приложений» из Microsoft Store (${appInstallerUrl}) и запустите установку снова.`}];
   for (const tool of wanted) plan.push({kind:'winget',tool,id:wingetPackages[tool],...(tool === 'ffmpeg' && wanted.includes('ytdlp') ? {skipIfPresent:true} : {})});
-  if (ejsOnly && tools.ytdlp.variant === 'pip') plan.push({kind:'pip',tool:'ytdlp',optional:true,args:pipCommand});
-  else if (ejsOnly && hasWinget) plan.push({kind:'winget',tool:'ytdlp',id:wingetPackages.ytdlp,optional:true});
+  if (!absent('ytdlp') && ytdlpStale(inspection)) {
+    const version = versionStep(outdatedTool(inspection,'ytdlp'));
+    if (tools.ytdlp.variant === 'pip') plan.push({kind:'pip',tool:'ytdlp',optional:true,args:pipCommand,...version});
+    else if (hasWinget && /[\\/]WinGet[\\/]/i.test(tools.ytdlp.location || tools.ytdlp.path)) plan.push({kind:'winget',verb:'upgrade',tool:'ytdlp',id:wingetPackages.ytdlp,optional:true,...version});
+    else if (youtube.ejs !== 'available' && hasWinget) plan.push({kind:'winget',tool:'ytdlp',id:wingetPackages.ytdlp,optional:true});
+    else plan.push({kind:'self-update',tool:'ytdlp',optional:true,...version});
+  }
+  const ffmpeg = !absent('ffmpeg') && outdatedTool(inspection,'ffmpeg');
+  if (ffmpeg && hasWinget) plan.push({kind:'winget',verb:'upgrade',tool:'ffmpeg',id:/Gyan\.FFmpeg_/i.test(tools.ffmpeg.location || tools.ffmpeg.path) ? 'Gyan.FFmpeg' : wingetPackages.ffmpeg,optional:true,...versionStep(ffmpeg)});
+  // Node.js — последним: его установщик заменяет node.exe, на котором работает этот мастер (и, возможно, сам ассистент).
+  // MSIRESTARTMANAGERCONTROL=Disable не даёт установщику Windows закрывать работающие программы; занятый файл заменится после перезагрузки.
+  const node = !absent('node') && outdatedTool(inspection,'node');
+  if (node && hasWinget && tools.node.wingetId) plan.push({kind:'winget',verb:'upgrade',tool:'node',id:tools.node.wingetId,custom:'MSIRESTARTMANAGERCONTROL=Disable',optional:true,...versionStep(node)});
   return plan;
 }
 // macOS: недостающее ставится через Homebrew; yt-dlp из Homebrew уже содержит EJS. В личную папку ничего не скачивается.
@@ -240,9 +326,17 @@ function macPlan(inspection) {
   const ejsOnly = !absent('ytdlp') && youtube.ejs !== 'available', hasBrew = brew?.status === 'available', plan = [];
   if (wanted.length && !hasBrew) return [{kind:'manual',automatic:false,url:'https://brew.sh',message:`Не хватает: ${wanted.map(name=>toolTitles[name]).join(', ')}. На компьютере нет Homebrew — установите его по инструкции с https://brew.sh (нужен пароль администратора) и запустите установку снова.`}];
   for (const tool of wanted) plan.push({kind:'brew',tool,formula:brewFormulas[tool],args:['install',brewFormulas[tool]]});
-  if (ejsOnly && hasBrew && brewOwned(tools.ytdlp.location)) plan.push({kind:'brew',tool:'ytdlp',formula:'yt-dlp',args:['upgrade','yt-dlp'],optional:true});
-  else if (ejsOnly && tools.ytdlp.variant === 'pip') plan.push({kind:'pip',tool:'ytdlp',optional:true,args:pipCommand});
-  else if (ejsOnly && hasBrew) plan.push({kind:'brew',tool:'ytdlp',formula:'yt-dlp',args:['install','yt-dlp'],optional:true});
+  if (!absent('ytdlp') && ytdlpStale(inspection)) {
+    const version = versionStep(outdatedTool(inspection,'ytdlp'));
+    if (hasBrew && brewOwned(tools.ytdlp.location)) plan.push({kind:'brew',tool:'ytdlp',formula:'yt-dlp',args:['upgrade','yt-dlp'],optional:true,...version});
+    else if (tools.ytdlp.variant === 'pip') plan.push({kind:'pip',tool:'ytdlp',optional:true,args:pipCommand,...version});
+    else if (ejsOnly && hasBrew) plan.push({kind:'brew',tool:'ytdlp',formula:'yt-dlp',args:['install','yt-dlp'],optional:true});
+    else plan.push({kind:'self-update',tool:'ytdlp',optional:true,...version});
+  }
+  for (const tool of ['ffmpeg','node']) {
+    const update = !absent(tool) && outdatedTool(inspection,tool);
+    if (update && hasBrew && brewOwned(tools[tool].location)) plan.push({kind:'brew',tool,formula:brewFormulas[tool],args:['upgrade',brewFormulas[tool]],optional:true,...versionStep(update)});
+  }
   return plan;
 }
 function downloadPlan(inspection,root) {
@@ -264,7 +358,7 @@ function downloadPlan(inspection,root) {
       plan.push({kind:'download',tool:'ffmpeg',url:base+asset,sha256:base+'checksums.sha256',asset,archive:true,target:path.join(root,'ffmpeg'),source:'https://ffmpeg.org/download.html'});
     } else plan.push({kind:'manual',tool:'ffmpeg',automatic:false,requiresPrivileges:platform === 'win32'?'возможны права администратора':'запись в префикс Homebrew',command:platform === 'darwin'?'brew':'winget',args:platform === 'darwin'?['install','ffmpeg']:['install','--id','Gyan.FFmpeg','--exact'],message:'Запасной пакетный менеджер выбирается пользователем отдельно. Укажите пути ffmpeg/ffprobe после установки; автоматического fallback нет.'});
   }
-  if (inspection.tools.ytdlp.status !== 'available' || inspection.youtube.ejs !== 'available') {
+  if (inspection.tools.ytdlp.status !== 'available' || ytdlpStale(inspection)) {
     const asset = platform === 'win32' ? arch === 'arm64' ? 'yt-dlp_arm64.exe':'yt-dlp.exe' : platform === 'darwin' ? 'yt-dlp_macos' : arch === 'arm64' ? 'yt-dlp_linux_aarch64':'yt-dlp_linux';
     const base = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/';
     // Если yt-dlp уже работает и не хватает только EJS, сбой этой загрузки не останавливает установку.
@@ -339,9 +433,9 @@ async function applyWinget(step,{run,platform,env,inspection,resolved,onProgress
   const title = toolTitles[step.tool], names = step.tool === 'ffmpeg' ? ['ffmpeg','ffprobe'] : [step.tool];
   const locateAll = async () => { const found = {}; for (const name of names) found[name] = await locateTool(name, resolved[name], {runProcess:run,platform,env}); return found; };
   if (step.skipIfPresent) { const found = await locateAll(); if (names.every(name => found[name].status === 'available')) { for (const name of names) resolved[name] = found[name].path; await progress(onProgress,{tool:step.tool,operation:'winget',status:'skipped',message:`${title} уже появился вместе с yt-dlp — отдельная установка не нужна.`}); return; } }
-  const args = ['install','--id',step.id,'--exact','--source','winget','--silent','--accept-package-agreements','--accept-source-agreements','--disable-interactivity'];
+  const args = [step.verb || 'install','--id',step.id,'--exact','--source','winget','--silent','--accept-package-agreements','--accept-source-agreements','--disable-interactivity',...(step.custom ? ['--custom',step.custom] : [])];
   let result;
-  try { result = await withHeartbeat(onProgress,step.tool,'winget',() => run(inspection.winget.path,args,{...processOptions,timeoutMs:30*60*1000,tailOnly:true})); }
+  try { result = await withHeartbeat(onProgress,step.tool,step.verb === 'upgrade' ? 'winget-upgrade' : 'winget',() => run(inspection.winget.path,args,{...processOptions,timeoutMs:30*60*1000,tailOnly:true})); }
   catch { throw fail('WINGET_START',`${title}: не удалось запустить winget.`); }
   const found = await locateAll();
   for (const name of names) if (found[name].status === 'available') resolved[name] = found[name].path;
@@ -358,7 +452,7 @@ async function applyBrew(step,{run,platform,env,inspection,resolved,onProgress})
   for (const name of names) { const found = await locateTool(name, resolved[name], {runProcess:run,platform,env}); if (found.status === 'available') resolved[name] = found.path; else missing.push(name); }
   if (missing.length) throw fail('BREW_FAILED',`${title}: Homebrew завершился с кодом ${result.code}, программа не найдена. Выполните в Терминале: brew ${step.args.join(' ')} — и запустите установку снова.`);
 }
-async function applyPip(step,{run,platform,inspection,onProgress}) {
+async function applyPip(step,{run,platform,env,inspection,onProgress}) {
   const current = inspection.tools.ytdlp.path, manual = `Обновите вручную: python ${pipCommand.join(' ')}`;
   if (platform !== 'win32') {
     // На macOS/Linux нужный Python указан в первой строке скрипта yt-dlp («#!/…/python3»).
@@ -374,13 +468,19 @@ async function applyPip(step,{run,platform,inspection,onProgress}) {
   }
   // Windows: обновляем тот же Python, которому принадлежит найденный yt-dlp: …\PythonXY\Scripts\yt-dlp.exe → …\PythonXY\python.exe.
   let script = path.isAbsolute(current) ? current : null;
-  if (!script) { const where = await run('where.exe',[current],processOptions).catch(() => null); script = String(where?.stdout || '').split(/\r?\n/).map(line => line.trim()).find(line => /[\\/]Scripts[\\/]yt-dlp(?:\.exe)?$/i.test(line)) || null; }
+  if (!script) { const found = inspection.tools.ytdlp.location || await onPath(current,env); script = found && /[\\/]Scripts[\\/]yt-dlp(?:\.exe)?$/i.test(found) ? found : null; }
   const python = script && /[\\/]Scripts[\\/]/i.test(script) ? path.join(path.dirname(path.dirname(script)),'python.exe') : null;
   if (!python || !await exists(python).catch(() => null)) throw fail('PIP_PYTHON',`не найден Python, в который установлен yt-dlp. ${manual}`);
   const result = await withHeartbeat(onProgress,'ytdlp','pip',() => run(python,step.args,{...processOptions,timeoutMs:10*60*1000,tailOnly:true}));
   if (result.code !== 0) throw fail('PIP_FAILED',`pip завершился с кодом ${result.code}. ${manual}`);
 }
+// Отдельный файл yt-dlp (не pip и не Homebrew) обновляет себя сам с GitHub и сверяет контрольную сумму.
+async function applySelfUpdate(step,{run,resolved,onProgress}) {
+  const result = await withHeartbeat(onProgress,'ytdlp','self-update',() => run(resolved.ytdlp,['-U'],{...processOptions,timeoutMs:10*60*1000,tailOnly:true}));
+  if (result.code !== 0) throw fail('YTDLP_UPDATE_FAILED',`yt-dlp не смог обновиться сам (код ${result.code}). Скачайте новую версию с https://github.com/yt-dlp/yt-dlp/releases/latest.`);
+}
 async function applyStep(step,options) {
+  if (step.kind === 'self-update') return applySelfUpdate(step,options);
   if (step.kind === 'winget') return applyWinget(step,options);
   if (step.kind === 'brew') return applyBrew(step,options);
   if (step.kind === 'pip') return applyPip(step,options);
@@ -408,24 +508,30 @@ async function applyStep(step,options) {
     }
   } else { await noLinks(step.target); await writeFile(step.target,bytes,{mode:0o755}); if(platform!=='win32') await chmod(step.target,0o755);resolved[step.tool]=step.target; }
 }
-export async function repairDependencies({allowInstall = false,dryRun = false,tools,runProcess:run = runProcess,fetchImpl = fetch,installRoot,home,platform = process.platform,arch = process.arch,env = process.env,inspection:previousInspection,onProgress} = {}) {
+export async function repairDependencies({allowInstall = false,dryRun = false,tools,runProcess:run = runProcess,fetchImpl = fetch,installRoot,home,platform = process.platform,arch = process.arch,env = process.env,inspection:previousInspection,onProgress,checkUpdates = false} = {}) {
   const root = path.resolve(installRoot || userToolRoot({home,platform,env}));
   await noLinks(root);
-  const inspection = previousInspection || await inspectDependencies({tools,runProcess:run,platform,arch,env,onProgress});
+  const inspection = previousInspection || await inspectDependencies({tools,runProcess:run,platform,arch,env,onProgress,checkUpdates,fetchImpl});
   const plan = downloadPlan(inspection,root),resolved = toolsFrom(inspection);
   const note = platform !== 'linux' ? 'Найденные и установленные программы записываются в настройки скилла полными путями; скилл работает сразу, даже если открытые окна ещё не видят новые программы.' : 'Программы устанавливаются в личную папку пользователя; системная переменная PATH не меняется.';
-  const warnings = [...inspection.warnings,note];
-  if (!plan.length) return {status:'ready',inspection,tools:resolved,plan,warnings:inspection.warnings};
+  // Устаревшую программу, которую мастер не умеет обновить (нет winget/Homebrew, чужой способ установки), пользователь обновляет сам.
+  const manualUpdates = (inspection.updates || []).filter(item => !plan.some(step => step.tool === item.tool)).map(item => `${toolTitles[item.tool]} ${item.current} устарел (последняя версия ${item.latest}): обновите его тем способом, которым устанавливали.`);
+  const warnings = [...inspection.warnings,...manualUpdates,note];
+  if (!plan.length) return {status:'ready',inspection,tools:resolved,plan,warnings:[...inspection.warnings,...manualUpdates]};
   if (!allowInstall || dryRun) return {status:'planned',inspection,tools:resolved,plan,warnings};
   if (plan.some(step=>step.kind==='manual')) return {status:'manual-required',inspection,tools:resolved,plan,warnings};
   const skipped = [];
   for (const step of plan) {
     try { await applyStep(step,{root,fetchImpl,run,platform,env,inspection,resolved,onProgress}); }
-    catch (error) { if (!step.optional) throw error; skipped.push(`yt-dlp не обновлён: ${error.installerSafe ? error.message : 'установка не удалась.'} Оставлен прежний yt-dlp.`); }
+    catch (error) { if (!step.optional) throw error; const title = toolTitles[step.tool] || step.tool; skipped.push(`${title} не обновлён: ${error.installerSafe ? error.message : 'установка не удалась.'} Оставлен прежний ${title}.`); }
   }
   const verified = await inspectDependencies({tools:resolved,runProcess:run,platform,arch,env,onProgress});
   const broken = Object.entries(verified.tools).filter(([,item]) => item.status !== 'available').map(([name]) => toolTitles[name] || name);
   if (broken.length) throw fail('INSTALL_VERIFICATION',`После установки не запускается: ${broken.join(', ')}. Скилл не скопирован; повторите установку или укажите путь к программе вручную.`);
-  if (plan.some(step=>step.tool==='node')) { const locator = path.join(root,'node-path.txt'); await noLinks(locator); await writeFile(locator,resolved.node+'\n',{mode:0o600}); }
-  return {status:'repaired',inspection:verified,tools:resolved,plan,warnings:[...skipped,...verified.warnings,note]};
+  // Путь к Node.js запоминается после установки; обновление (шаг с версией to) путь не меняет.
+  if (plan.some(step=>step.tool==='node' && !step.to)) { const locator = path.join(root,'node-path.txt'); await noLinks(locator); await writeFile(locator,resolved.node+'\n',{mode:0o600}); }
+  // Обновление могло завершиться без ошибки, но не примениться (занятый node.exe, «нет обновлений» у пакетного менеджера).
+  // Пакетный менеджер может отставать от сайта разработчика на выпуск, поэтому сравнение — с прежней версией, а не с последней.
+  const unchanged = plan.filter(step => step.from && !isNewer(step.tool === 'ffmpeg' ? verified.tools.ffmpeg.release : verified.tools[step.tool]?.version,step.from)).map(step => `${toolTitles[step.tool]} пока остался прежней версии${step.tool === 'node' ? ': если Node.js был занят, новая версия появится после перезагрузки компьютера.' : '; повторите обновление позже.'}`);
+  return {status:'repaired',inspection:verified,tools:resolved,plan,warnings:[...skipped,...unchanged,...manualUpdates,...verified.warnings,note]};
 }

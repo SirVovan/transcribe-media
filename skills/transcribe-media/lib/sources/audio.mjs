@@ -67,7 +67,7 @@ async function downloadSource(source, options) {
     }
     // yt-dlp aborts stalled sockets itself (--socket-timeout); the overall limit only guards a hung tool.
     const timeoutMs = 30 * 60_000 + (Number.isFinite(source.durationSeconds) ? source.durationSeconds * 1000 : 0);
-    const result = await callYtdlp(['--no-cache-dir', '--no-write-info-json', '--no-write-thumbnail', '--no-continue', '--no-overwrites', '--paths', `home:${tempDir}`, '--paths', `temp:${tempDir}`, '-f', audioFormat(source), '-o', path.join(tempDir, 'source.%(ext)s'), '--print', 'after_move:filepath', '--', source.canonicalUrl || source.input], { ...options, timeoutMs });
+    const result = await callYtdlp(['--no-cache-dir', '--no-write-info-json', '--no-write-thumbnail', '--no-continue', '--no-overwrites', '--paths', `home:${tempDir}`, '--paths', `temp:${tempDir}`, '-f', audioFormat(source), ...(source.playlistItem ? ['--playlist-items', String(source.playlistItem)] : []), '-o', path.join(tempDir, 'source.%(ext)s'), '--print', 'after_move:filepath', '--', source.canonicalUrl || source.input], { ...options, timeoutMs });
     const file = String(result.stdout || '').trim().split(/\r?\n/).at(-1);
     if (!file) throw sourceError('SOURCE_DOWNLOAD', 'Инструмент не сообщил путь скачанного медиа.');
     try { return await safeFile(tempDir, path.resolve(tempDir, file)); }
