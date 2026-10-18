@@ -32,7 +32,7 @@ function resultLinks(outputDir, files) { return { folder: pathToFileURL(outputDi
 function planSummary(config) {
   const language = config.language === 'auto' ? 'автоопределение' : config.language === 'multi' ? 'несколько языков (multi)' : languageName(config.language);
   const speakers = config.diarize ? `включено${Number.isInteger(config.speakerCount) ? `, спикеров: ${config.speakerCount}` : ''}` : 'выключено';
-  return [`Язык: ${language}`, `Длина субтитра: ${config.interval} с`, `Разделение по спикерам: ${speakers}`, `Сервис: ${config.provider === 'assemblyai' ? 'AssemblyAI' : 'Deepgram'} (${config.model})`];
+  return [`Язык: ${language}`, `Длина субтитра: ${config.interval} с`, `Разделение по спикерам: ${speakers}`, `Сервис: ${config.provider === 'assemblyai' ? 'AssemblyAI' : 'Deepgram'} (${config.model})`, `Результат: ${config.formats.map(format => format.toUpperCase()).join(', ')} в ${config.outputRoot}`];
 }
 // Title and aligned block for the form's preview pane (approved by the user 15.10).
 function planForm(config, requestedSource) {
