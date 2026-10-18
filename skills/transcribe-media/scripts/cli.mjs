@@ -197,7 +197,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
       try { const cleaned = await d.cleanupJob(activeJob, { keepTemp: !!flags['keep-temp'] }); warnings = [...new Set([...warnings, ...(cleaned.warnings || [])])]; }
       catch { warnings.push('Временные файлы не удалены; результат сохранён.'); }
       const detectedLanguage = formatted.transcript.detectedLanguage;
-      const result = { exitCode: 0, status: 'complete', runId: activeJob.runId, outputDir: activeJob.outputDir, method, timingPrecision: formatted.transcript.timingPrecision, ...(detectedLanguage ? { detectedLanguage, languageNote: languageNote(detectedLanguage) } : {}), warnings };
+      const result = { exitCode: 0, status: 'complete', runId: activeJob.runId, outputDir: activeJob.outputDir, files: d.resultPaths(activeJob, config.formats), method, timingPrecision: formatted.transcript.timingPrecision, ...(detectedLanguage ? { detectedLanguage, languageNote: languageNote(detectedLanguage) } : {}), warnings };
       emit(result); return result;
     };
     if (command === 'transcribe') {
@@ -221,7 +221,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
       const previous = await d.findResult({ outputRoot: config.outputRoot, cacheKey: job.cacheKey, interval: config.interval, formats: config.formats });
       if (previous) {
         await d.discardJob(job);
-        const result = { exitCode: 0, status: 'complete', reused: true, runId: previous.runId, outputDir: previous.outputDir, method: previous.method, timingPrecision: previous.timingPrecision, ...(previous.detectedLanguage ? { detectedLanguage: previous.detectedLanguage, languageNote: languageNote(previous.detectedLanguage) } : {}), message: `Такой результат уже есть: ${previous.outputDir}. Новая папка не создана.`, warnings: [] };
+        const result = { exitCode: 0, status: 'complete', reused: true, runId: previous.runId, outputDir: previous.outputDir, files: previous.files, method: previous.method, timingPrecision: previous.timingPrecision, ...(previous.detectedLanguage ? { detectedLanguage: previous.detectedLanguage, languageNote: languageNote(previous.detectedLanguage) } : {}), message: `Такой результат уже есть: ${previous.outputDir}. Новая папка не создана.`, warnings: [] };
         emit(result); return result;
       }
       const cache = await d.readCache({ workRoot: config.workRoot, cacheKey: job.cacheKey });

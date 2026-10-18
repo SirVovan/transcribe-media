@@ -224,6 +224,8 @@ export async function saveProviderResponse(job, raw) {
 }
 // Text and subtitle files carry the title; folders made before 16.10 have no fileBase and keep transcript.*.
 export function resultFile(job, format) { return `${job.fileBase || 'transcript'}.${format}`; }
+// Absolute paths of the text and subtitle files by format, for the CLI answer.
+export function resultPaths(job, formats) { return Object.fromEntries(formats.map(format => [format, path.join(job.outputDir, resultFile(job, format))])); }
 export async function saveResult(job, { transcript, files, raw, source }) {
   jobPaths(job);
   if (Object.keys(files || {}).some(file => !['transcript.txt', 'transcript.srt', 'transcript.vtt'].includes(file))) throw new Error('Недопустимый файл результата.');
@@ -323,11 +325,11 @@ export async function findResult({ outputRoot, cacheKey, interval, formats }) {
     const files = await Promise.all(['transcript.json', ...formats.map(format => resultFile(job, format))].map(file => lstat(path.join(dir, file)).then(info => info.isFile(), () => false)));
     if (!files.every(Boolean)) continue;
     const time = (await stat(path.join(dir, 'job.json'))).mtimeMs;
-    if (!best || time > best.time) best = { time, outputDir: dir, runId: job.runId };
+    if (!best || time > best.time) best = { time, outputDir: dir, runId: job.runId, files: resultPaths({ outputDir: dir, fileBase: job.fileBase }, formats) };
   }
   if (!best) return null;
   let transcript = null; try { transcript = await json(path.join(best.outputDir, 'transcript.json')); } catch {}
-  return { outputDir: best.outputDir, runId: best.runId, method: transcript?.method, timingPrecision: transcript?.timingPrecision, ...(typeof transcript?.detectedLanguage === 'string' ? { detectedLanguage: transcript.detectedLanguage } : {}) };
+  return { outputDir: best.outputDir, runId: best.runId, files: best.files, method: transcript?.method, timingPrecision: transcript?.timingPrecision, ...(typeof transcript?.detectedLanguage === 'string' ? { detectedLanguage: transcript.detectedLanguage } : {}) };
 }
 // Removes a run that turned out unnecessary: its output folder is still empty, its work folder holds only temp files.
 export async function discardJob(job) {
