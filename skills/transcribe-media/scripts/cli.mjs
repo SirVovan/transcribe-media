@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFile, stat, rmdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import * as configuration from '../lib/config/index.mjs';
@@ -26,6 +26,8 @@ function languageName(code) {
   return name && name !== code ? `${name} (${code})` : code;
 }
 function languageNote(code) { return `Определён язык: ${languageName(code)}`; }
+// file:// addresses of the result folder and files: spaces and Cyrillic in paths are percent-encoded, so an assistant can put them into Markdown links.
+function resultLinks(outputDir, files) { return { folder: pathToFileURL(outputDir).href, ...Object.fromEntries(Object.entries(files).map(([format, file]) => [format, pathToFileURL(file).href])) }; }
 // Lines of the confirmation form the assistant shows before transcription.
 function planSummary(config) {
   const language = config.language === 'auto' ? 'автоопределение' : config.language === 'multi' ? 'несколько языков (multi)' : languageName(config.language);
@@ -197,7 +199,8 @@ export async function main(args = process.argv.slice(2), options = {}) {
       try { const cleaned = await d.cleanupJob(activeJob, { keepTemp: !!flags['keep-temp'] }); warnings = [...new Set([...warnings, ...(cleaned.warnings || [])])]; }
       catch { warnings.push('Временные файлы не удалены; результат сохранён.'); }
       const detectedLanguage = formatted.transcript.detectedLanguage;
-      const result = { exitCode: 0, status: 'complete', runId: activeJob.runId, outputDir: activeJob.outputDir, files: d.resultPaths(activeJob, config.formats), method, timingPrecision: formatted.transcript.timingPrecision, ...(detectedLanguage ? { detectedLanguage, languageNote: languageNote(detectedLanguage) } : {}), warnings };
+      const files = d.resultPaths(activeJob, config.formats);
+      const result = { exitCode: 0, status: 'complete', runId: activeJob.runId, outputDir: activeJob.outputDir, files, links: resultLinks(activeJob.outputDir, files), method, timingPrecision: formatted.transcript.timingPrecision, ...(detectedLanguage ? { detectedLanguage, languageNote: languageNote(detectedLanguage) } : {}), warnings };
       emit(result); return result;
     };
     if (command === 'transcribe') {
@@ -221,7 +224,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
       const previous = await d.findResult({ outputRoot: config.outputRoot, cacheKey: job.cacheKey, interval: config.interval, formats: config.formats });
       if (previous) {
         await d.discardJob(job);
-        const result = { exitCode: 0, status: 'complete', reused: true, runId: previous.runId, outputDir: previous.outputDir, files: previous.files, method: previous.method, timingPrecision: previous.timingPrecision, ...(previous.detectedLanguage ? { detectedLanguage: previous.detectedLanguage, languageNote: languageNote(previous.detectedLanguage) } : {}), message: `Такой результат уже есть: ${previous.outputDir}. Новая папка не создана.`, warnings: [] };
+        const result = { exitCode: 0, status: 'complete', reused: true, runId: previous.runId, outputDir: previous.outputDir, files: previous.files, links: resultLinks(previous.outputDir, previous.files), method: previous.method, timingPrecision: previous.timingPrecision, ...(previous.detectedLanguage ? { detectedLanguage: previous.detectedLanguage, languageNote: languageNote(previous.detectedLanguage) } : {}), message: `Такой результат уже есть: ${previous.outputDir}. Новая папка не создана.`, warnings: [] };
         emit(result); return result;
       }
       const cache = await d.readCache({ workRoot: config.workRoot, cacheKey: job.cacheKey });
