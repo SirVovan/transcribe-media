@@ -33,7 +33,7 @@ select --in-place — скилл уже установлен из GitHub (/plugi
 --recover разрешает восстановить только собственную сессию после подтверждённого завершения её процесса.
 Не передавайте ключи в команды.
 Закрытие панели не останавливает мастер; stop или Ctrl+C безопасно закрывает процесс serve.
-Без управляющих запросов serve закрывается через 30 минут; активную операцию не обрывает.
+Без управляющих запросов serve закрывается через 60 минут; активную операцию не обрывает.
 `;
 const fail=(code,message)=>Object.assign(new Error(message),{code,installerSafe:true});
 const valueFlags=['state','config','node','session','agent','scope','project','plan-id','language','interval','formats','speakers','output'];
@@ -97,7 +97,7 @@ async function detachServe(args,{statePath,sessionPath,print,deps,env}){
  }
 }
 // settings: страница настроек в браузере. Работающий сервер этой сессии переиспользуется, второй не запускается;
-// иначе сервер запускается в фоне так же, как serve --detach, и сам выключается через 30 минут без действий.
+// иначе сервер запускается в фоне так же, как serve --detach, и сам выключается через 60 минут без действий.
 async function openSettings({flags,statePath,sessionPath,print,deps,env,openBrowser}){
  let panelUrl=null,started=null;
  try{const session=await deps.readSession(sessionPath);const identity=await api(session,'/api/session',deps);if(identity.id===session.id)panelUrl=session.url;}catch{/* сервера нет — запускаем */}
@@ -129,7 +129,10 @@ export async function main(args=process.argv.slice(2),options={}){
  let engine,server,closing,descriptorWritten=false,resolveClosed;const closed=new Promise(resolve=>resolveClosed=resolve);
  const close=()=>closing||= (async()=>{try{await engine?.close();}finally{try{await server?.close();}finally{try{if(descriptorWritten){await guarded(sessionPath);const s=JSON.parse(await readFile(sessionPath,'utf8'));if(s.owner===lease.owner.owner)await unlink(sessionPath);}}finally{await lease.release();if(options.cleanupTemp)await cleanupStartPanels({current:env.TRANSCRIBE_BOOTSTRAP_HANDOFF||null});resolveClosed();}}}})();
  try{
-  engine=await deps.createInstaller({...options.engineOptions,statePath,...(flags.config?{configPath:path.resolve(flags.config)}:{}),...(flags.node?{tools:{...options.engineOptions?.tools,node:path.resolve(flags.node)}}:{})});server=await deps.startServer(engine,{onShutdown:close});
+  engine=await deps.createInstaller({...options.engineOptions,statePath,...(flags.config?{configPath:path.resolve(flags.config)}:{}),...(flags.node?{tools:{...options.engineOptions?.tools,node:path.resolve(flags.node)}}:{})});
+  // Готовность сервиса не хранится в state.json: без пересчёта status показывал «не готово» при проверенном ключе, пока не открыта /setup.
+  try{await engine.settingsRefresh?.();}catch{/* Повреждённые ключи или настройки покажет страница настроек. */}
+  server=await deps.startServer(engine,{onShutdown:close});
   await guarded(sessionPath);await writeFile(sessionPath,JSON.stringify({version:1,url:server.url,capability:server.capability,id:engine.snapshot().id,owner:lease.owner.owner,pid:process.pid}),{mode:0o600});descriptorWritten=true;
   if(flags.open){
    options.openBrowser?.(server.url);

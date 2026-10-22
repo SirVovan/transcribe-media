@@ -92,7 +92,7 @@ export async function startServer(engine,{createServer=http.createServer,...opti
  const close=()=>{clearInterval(idle);return closing||=(new Promise((resolve,reject)=>{server.close(error=>error?reject(error):resolve());server.closeIdleConnections?.();}));};
  const shutdown=async()=>{await engine.close();await (options.onShutdown?options.onShutdown():close());};
  const url=`http://127.0.0.1:${server.address().port}`;handler=createHandler(engine,{...options,origin:url,capability,browserCapability,onShutdown:shutdown,onActivity:()=>{lastActivity=Date.now();}});
- const idleTimeoutMs=options.idleTimeoutMs??30*60*1000;
+ const idleTimeoutMs=options.idleTimeoutMs??60*60*1000;
  idle=setInterval(()=>{if(Date.now()-lastActivity>=idleTimeoutMs&&!engine.snapshot().operation&&!handler.isBusy()){clearInterval(idle);shutdown().catch(()=>{});}},Math.min(30000,idleTimeoutMs));idle.unref?.();
  return {url,capability,close};
 }

@@ -52,22 +52,31 @@ npx skills add SirVovan/transcribe-media -g -a codex
    Windows (PowerShell):
 
    ```powershell
+   $ErrorActionPreference = 'Stop'
    $dir = Join-Path $env:LOCALAPPDATA 'transcribe-media-package'
+   $zip = Join-Path $dir 'main.zip'
    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+   Remove-Item -Force -LiteralPath $zip -ErrorAction SilentlyContinue
    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-   Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/SirVovan/transcribe-media/archive/refs/heads/main.zip' -OutFile (Join-Path $dir 'main.zip')
-   Expand-Archive -Force -LiteralPath (Join-Path $dir 'main.zip') -DestinationPath $dir
+   Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/SirVovan/transcribe-media/archive/refs/heads/main.zip' -OutFile $zip
+   Expand-Archive -Force -LiteralPath $zip -DestinationPath $dir
    ```
 
    macOS/Linux:
 
    ```sh
-   dir="$HOME/.local/share/transcribe-media-package"; mkdir -p "$dir"
-   curl -fsSL -o "$dir/main.zip" https://github.com/SirVovan/transcribe-media/archive/refs/heads/main.zip
-   unzip -oq "$dir/main.zip" -d "$dir"
+   dir="$HOME/.local/share/transcribe-media-package"; mkdir -p "$dir"; rm -f "$dir/main.zip"
+   curl -fsSL -o "$dir/main.zip" https://github.com/SirVovan/transcribe-media/archive/refs/heads/main.zip && unzip -oq "$dir/main.zip" -d "$dir"
    ```
 
    Корень пакета — папка `transcribe-media-main` внутри `$dir`.
+
+   Если загрузка не удалась (например, «Невозможно соединиться с удаленным сервером» или ошибка прокси), не продолжай: старая распакованная копия может быть прежней версией. Частая причина — в системе указан прокси, который сейчас не отвечает. Не меняй и не отключай системные настройки прокси: они могут быть нужны пользователю. Скажи пользователю, что обычная загрузка не прошла, и спроси разрешения скачать архив напрямую, без прокси, только для этой загрузки. После согласия повтори те же команды, добавив первой строкой:
+
+   - Windows: `if ($PSVersionTable.PSVersion.Major -ge 6) { $PSDefaultParameterValues['Invoke-WebRequest:NoProxy'] = $true } else { [Net.WebRequest]::DefaultWebProxy = $null }`
+   - macOS/Linux: `export NO_PROXY='*' no_proxy='*'`
+
+   Если не прошла и прямая загрузка, передай пользователю текст ошибки и предложи скачать [архив](https://github.com/SirVovan/transcribe-media/archive/refs/heads/main.zip) в браузере и распаковать его в `$dir`.
 
 2. Прочитай `<корень-пакета>/skills/transcribe-media/references/install.md` и пройди установку по нему в режиме «Пакет». Все согласия из инструкции обязательны.
 
